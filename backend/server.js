@@ -1,34 +1,62 @@
-
 require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const mongoose = require("mongoose");
 const connectDB = require("./config/db");
 
 const app = express();
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:3000",
+  "https://fix-first-frontend.vercel.app",
+  process.env.CLIENT_URL
+].filter(Boolean);
+
 // Middleware
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:3000",
-      "http://127.0.0.1:5173",
-      "http://127.0.0.1:3000",
-      process.env.CLIENT_URL
-    ].filter(Boolean),
+    origin: (origin, callback) => {
+      // Allow non-browser requests (for example health checks and server-to-server calls).
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Origin is not allowed by FixFirst CORS policy"));
+    },
     credentials: true
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+
+// Ensure MongoDB Atlas is connected before any route accesses the database.
+// This is required because Vercel may import the Express app without executing
+// the local app.listen() startup block below.
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error("Database connection unavailable:", error.message);
+    res.status(503).json({
+      status: "error",
+      message: "Database connection unavailable. Please try again shortly."
+    });
+  }
+});
 
 // Health check
 app.get("/", (req, res) => {
   res.status(200).json({
     status: "healthy",
     message: "FixFirst API is running successfully!",
-    database: "Local MongoDB",
+    database: mongoose.connection.readyState === 1
+      ? "Connected to MongoDB Atlas"
+      : "Not connected",
     timestamp: new Date().toISOString()
   });
 });
@@ -55,7 +83,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
+// Local development startup. On Vercel, the exported Express app is handled
+// by the Vercel Node.js runtime and this block is not used.
 const startServer = async () => {
   try {
     await connectDB();
@@ -64,6 +93,7 @@ const startServer = async () => {
 
     app.listen(PORT, () => {
       console.log(`FixFirst server running on port ${PORT}`);
+      console.log("MongoDB Atlas connection established.");
     });
   } catch (error) {
     console.error("Failed to start server:", error.message);
@@ -71,8 +101,6 @@ const startServer = async () => {
   }
 };
 
-// Start the HTTP server only when this file is executed directly.
-// This keeps the Express app safe to import from the isolated test suite.
 if (require.main === module) {
   startServer();
 }
